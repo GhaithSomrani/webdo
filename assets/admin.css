@@ -1,0 +1,212 @@
+/**
+ * WebDo Article Importer - Admin Styles
+ * 
+ * Place this file in: /wp-content/plugins/webdo-article-importer/assets/admin.css
+ */
+
+.wai-container {
+    max-width: 1200px;
+    margin: 20px 0;
+}
+
+.wai-section {
+    background: #fff;
+    border: 1px solid #ccd0d4;
+    box-shadow: 0 1px 1px rgba(0,0,0,.04);
+    margin-bottom: 20px;
+    padding: 20px;
+}
+
+.wai-section h2 {
+    margin-top: 0;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #eee;
+}
+
+.wai-section h3 {
+    margin-top: 20px;
+    margin-bottom: 10px;
+}
+
+/* Progress Bar */
+.progress-bar-container {
+    width: 100%;
+    height: 20px;
+    background-color: #f0f0f0;
+    border-radius: 10px;
+    overflow: hidden;
+    margin: 20px 0;
+}
+
+.progress-bar {
+    height: 100%;
+    background-color: #2271b1;
+    transition: width 0.3s ease;
+    text-align: center;
+    line-height: 20px;
+    color: white;
+}
+
+.progress-text {
+    font-size: 16px;
+    font-weight: bold;
+    margin: 10px 0;
+}
+
+.progress-status {
+    font-size: 14px;
+    color: #666;
+}
+
+/* Import Log Table */
+#import-log table {
+    margin-top: 10px;
+}
+
+#import-log .status-success {
+    color: #46b450;
+    font-weight: bold;
+}
+
+#import-log .status-error {
+    color: #dc3232;
+    font-weight: bold;
+}
+
+#import-log .status-updated {
+    color: #f0b849;
+    font-weight: bold;
+}
+
+/* Statistics Grid */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 20px;
+    margin-top: 20px;
+}
+
+.stat-item {
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 4px;
+    padding: 15px;
+    text-align: center;
+}
+
+.stat-item h4 {
+    margin: 0 0 10px 0;
+    color: #666;
+    font-size: 14px;
+    font-weight: normal;
+}
+
+.stat-number {
+    font-size: 32px;
+    font-weight: bold;
+    color: #333;
+    margin: 0;
+}
+
+.stat-number.success {
+    color: #46b450;
+}
+
+.stat-number.error {
+    color: #dc3232;
+}
+
+/* Form Styling */
+.form-table th {
+    width: 200px;
+}
+
+.form-table input[type="text"] {
+    width: 100%;
+    max-width: 500px;
+}
+
+.form-table input[type="number"] {
+    width: 80px;
+}
+
+.form-table label {
+    display: block;
+    margin-bottom: 5px;
+}
+
+.form-table .description {
+    font-style: italic;
+    color: #666;
+}
+
+/* Buttons */
+.button {
+    margin-right: 10px;
+}
+
+#pause-import.button:disabled {
+    opacity: 0.6;
+}
+
+/* Responsive Design */
+@media screen and (max-width: 782px) {
+    .wai-container {
+        margin: 10px 0;
+    }
+    
+    .wai-section {
+        padding: 10px;
+    }
+    
+    .stats-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .form-table th,
+    .form-table td {
+        display: block;
+        width: 100%;
+    }
+    
+    .form-table th {
+        padding-bottom: 5px;
+    }
+}
+
+/* Loading Indicator */
+.wai-loading {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border: 3px solid rgba(0,0,0,.1);
+    border-radius: 50%;
+    border-top-color: #2271b1;
+    animation: wai-spin 1s ease-in-out infinite;
+    margin-left: 10px;
+    vertical-align: middle;
+}
+
+@keyframes wai-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Error Messages */
+.wai-error {
+    background-color: #f8d7da;
+    border: 1px solid #f5c6cb;
+    color: #721c24;
+    padding: 10px;
+    border-radius: 4px;
+    margin: 10px 0;
+}
+
+/* Success Messages */
+.wai-success {
+    background-color: #d4edda;
+    border: 1px solid #c3e6cb;
+    color: #155724;
+    padding: 10px;
+    border-radius: 4px;
+    margin: 10px 0;
+}
