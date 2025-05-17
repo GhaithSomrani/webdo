@@ -73,8 +73,24 @@ class WAI_Importer {
             
             // Process each article
             foreach ($batch as $article) {
-                $article_result = $this->import_article($article);
-                $result['processed'][] = $article_result;
+                try {
+                    $article_result = $this->import_article($article);
+                    $result['processed'][] = $article_result;
+                } catch (Exception $e) {
+                    // Log the error and continue with the next article
+                    $article_id = isset($article['id']) ? $article['id'] : 0;
+                    $article_title = isset($article['title']) ? $article['title'] : 'Unknown';
+                    
+                    $result['processed'][] = array(
+                        'id' => $article_id,
+                        'title' => $article_title,
+                        'status' => 'failed',
+                        'message' => 'Error: ' . $e->getMessage()
+                    );
+                    
+                    // Log to error log too for debugging
+                    error_log("WebDo Importer Error (Article ID: $article_id): " . $e->getMessage());
+                }
             }
             
             $result['success'] = true;
@@ -82,6 +98,7 @@ class WAI_Importer {
             
         } catch (Exception $e) {
             $result['message'] = $e->getMessage();
+            error_log("WebDo Importer Error (Batch): " . $e->getMessage());
         }
         
         return $result;
@@ -96,7 +113,16 @@ class WAI_Importer {
         );
         
         try {
-            $json_post_id = intval($article['id']);
+            // Validate required fields
+            if (empty($article['title'])) {
+                throw new Exception("Article title is missing");
+            }
+            
+            // Convert ID to integer and validate
+            $json_post_id = isset($article['id']) ? intval($article['id']) : 0;
+            if ($json_post_id <= 0) {
+                throw new Exception("Invalid article ID");
+            }
             
             // First check if a post exists with this exact ID
             if ($json_post_id && get_post($json_post_id)) {
@@ -125,6 +151,8 @@ class WAI_Importer {
             
         } catch (Exception $e) {
             $result['message'] = $e->getMessage();
+            // Exception will be caught by the parent method
+            throw $e;
         }
         
         return $result;
@@ -134,12 +162,26 @@ class WAI_Importer {
         // Prepare post data
         $author_id = 1;
         if (!empty($article['author_name'])) {
-            $author_id = $this->get_or_create_user($article['author_name']);
+            try {
+                $author_id = $this->get_or_create_user($article['author_name']);
+            } catch (Exception $e) {
+                // Use default author if there's a problem
+                error_log("Could not create author: " . $e->getMessage());
+            }
         }
         
         $post_date = current_time('mysql');
         if (!empty($article['date_of_publish'])) {
-            $post_date = date('Y-m-d H:i:s', strtotime($article['date_of_publish']));
+            try {
+                $timestamp = strtotime($article['date_of_publish']);
+                if ($timestamp === false) {
+                    throw new Exception("Invalid date format");
+                }
+                $post_date = date('Y-m-d H:i:s', $timestamp);
+            } catch (Exception $e) {
+                // Use current time if there's a date problem
+                error_log("Invalid date format in article ID " . $article['id'] . ": " . $e->getMessage());
+            }
         }
         
         $post_name = $article['slug'] ?? '';
@@ -185,14 +227,26 @@ class WAI_Importer {
         }
         
         // Add categories and tags
-        $this->add_post_terms($post_id, $article);
+        try {
+            $this->add_post_terms($post_id, $article);
+        } catch (Exception $e) {
+            error_log("Error adding terms to post ID $post_id: " . $e->getMessage());
+        }
         
         // Add meta data
-        $this->add_post_meta($post_id, $article);
+        try {
+            $this->add_post_meta($post_id, $article);
+        } catch (Exception $e) {
+            error_log("Error adding meta to post ID $post_id: " . $e->getMessage());
+        }
         
         // Handle featured image
         if (!$this->config['skip_images'] && !empty($article['image_link'])) {
-            $this->set_featured_image($post_id, $article['image_link'], $article['image_alt'] ?? '');
+            try {
+                $this->set_featured_image($post_id, $article['image_link'], $article['image_alt'] ?? '');
+            } catch (Exception $e) {
+                error_log("Error setting featured image for post ID $post_id: " . $e->getMessage());
+            }
         }
         
         return $post_id;
@@ -218,9 +272,14 @@ class WAI_Importer {
         
         // Handle author based on configuration
         if (!$this->config['preserve_authors'] && !empty($article['author_name'])) {
-            // Only update author if not preserving and author is specified
-            $author_id = $this->get_or_create_user($article['author_name']);
-            $post_data['post_author'] = $author_id;
+            try {
+                // Only update author if not preserving and author is specified
+                $author_id = $this->get_or_create_user($article['author_name']);
+                $post_data['post_author'] = $author_id;
+            } catch (Exception $e) {
+                error_log("Error setting author for post ID $post_id: " . $e->getMessage());
+                // Continue without changing the author
+            }
         }
         // If preserve_authors is true or no author in JSON, keep the existing author
         
@@ -231,10 +290,18 @@ class WAI_Importer {
         }
         
         // Update categories and tags
-        $this->add_post_terms($post_id, $article, true);
+        try {
+            $this->add_post_terms($post_id, $article, true);
+        } catch (Exception $e) {
+            error_log("Error updating terms for post ID $post_id: " . $e->getMessage());
+        }
         
         // Update meta data
-        $this->add_post_meta($post_id, $article, true);
+        try {
+            $this->add_post_meta($post_id, $article, true);
+        } catch (Exception $e) {
+            error_log("Error updating meta for post ID $post_id: " . $e->getMessage());
+        }
         
         return $post_id;
     }
@@ -253,6 +320,17 @@ class WAI_Importer {
         
         // Create new user
         $username = sanitize_user(strtolower(str_replace(' ', '_', $author_name)));
+        
+        // Make sure username is not empty
+        if (empty($username) || strlen($username) < 3) {
+            $username = 'author_' . time();
+        }
+        
+        // Check if username exists
+        if (username_exists($username)) {
+            $username = $username . '_' . rand(100, 999);
+        }
+        
         $user_data = array(
             'user_login' => $username,
             'user_pass' => wp_generate_password(),
@@ -265,7 +343,7 @@ class WAI_Importer {
         $user_id = wp_insert_user($user_data);
         
         if (is_wp_error($user_id)) {
-            return 1; // Default to admin if user creation fails
+            throw new Exception($user_id->get_error_message());
         }
         
         $this->author_cache[$author_name] = $user_id;
@@ -341,20 +419,26 @@ class WAI_Importer {
             // Download image
             $tmp = download_url($image_url);
             
-            if (!is_wp_error($tmp)) {
-                $file_array = array(
-                    'name' => basename($image_url),
-                    'tmp_name' => $tmp
-                );
-                
-                // Create attachment
-                $attachment_id = media_handle_sideload($file_array, $post_id, $image_alt);
-                
-                if (!is_wp_error($attachment_id)) {
-                    // Set alt text
-                    update_post_meta($attachment_id, '_wp_attachment_image_alt', $image_alt);
-                }
+            if (is_wp_error($tmp)) {
+                throw new Exception("Failed to download image: " . $tmp->get_error_message());
             }
+            
+            $file_array = array(
+                'name' => basename($image_url),
+                'tmp_name' => $tmp
+            );
+            
+            // Create attachment
+            $attachment_id = media_handle_sideload($file_array, $post_id, $image_alt);
+            
+            if (is_wp_error($attachment_id)) {
+                // Clean up the temp file
+                @unlink($tmp);
+                throw new Exception("Failed to create attachment: " . $attachment_id->get_error_message());
+            }
+            
+            // Set alt text
+            update_post_meta($attachment_id, '_wp_attachment_image_alt', $image_alt);
         }
         
         if ($attachment_id && !is_wp_error($attachment_id)) {
@@ -397,13 +481,17 @@ class WAI_Importer {
         
         try {
             // Update the main post ID
-            $wpdb->update(
+            $result = $wpdb->update(
                 $wpdb->posts,
                 array('ID' => $new_id),
                 array('ID' => $old_id),
                 array('%d'),
                 array('%d')
             );
+            
+            if ($result === false) {
+                throw new Exception("Database error: " . $wpdb->last_error);
+            }
             
             // Update all related tables
             $tables_to_update = array(

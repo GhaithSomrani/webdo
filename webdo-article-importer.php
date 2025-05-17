@@ -2,12 +2,11 @@
 /**
  * Plugin Name: WebDo Article Importer
  * Description: Import articles from webdo02.json file into WordPress
- * Version: 1.0.0
+ * Version: 1.0.1
  * Author: Your Name
  * License: GPL v2 or later
  */
 
-// Prevent direct access
 // Prevent direct access
 if (!defined('ABSPATH')) {
     exit;
@@ -16,7 +15,7 @@ if (!defined('ABSPATH')) {
 // Define plugin constants
 define('WAI_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('WAI_PLUGIN_URL', plugin_dir_url(__FILE__));
-define('WAI_VERSION', '1.0.0');
+define('WAI_VERSION', '1.0.1');
 
 // Main plugin class
 class WebDoArticleImporter {
@@ -28,6 +27,10 @@ class WebDoArticleImporter {
         global $wpdb;
         $this->table_name = $wpdb->prefix . 'wai_import_log';
         
+        // Include the importer class first to avoid dependency issues
+        require_once WAI_PLUGIN_DIR . 'includes/class-importer.php';
+        $this->importer = new WAI_Importer();
+        
         // Hook into WordPress
         add_action('init', array($this, 'init'));
         add_action('admin_menu', array($this, 'add_admin_menu'));
@@ -36,10 +39,6 @@ class WebDoArticleImporter {
         add_action('wp_ajax_wai_check_status', array($this, 'ajax_check_status'));
         add_action('wp_ajax_wai_reset_import', array($this, 'ajax_reset_import'));
         add_action('wp_ajax_wai_create_table', array($this, 'ajax_create_table'));
-        
-        // Include the importer class
-        require_once WAI_PLUGIN_DIR . 'includes/class-importer.php';
-        $this->importer = new WAI_Importer();
     }
     
     public function init() {
@@ -109,7 +108,7 @@ class WebDoArticleImporter {
             'wai-admin',
             WAI_PLUGIN_URL . 'assets/admin.js',
             array('jquery'),
-            WAI_VERSION,
+            WAI_VERSION . '.' . time(), // Use time for cache busting during development
             true
         );
         
@@ -117,7 +116,7 @@ class WebDoArticleImporter {
             'wai-admin',
             WAI_PLUGIN_URL . 'assets/admin.css',
             array(),
-            WAI_VERSION
+            WAI_VERSION . '.' . time() // Use time for cache busting during development
         );
         
         wp_localize_script('wai-admin', 'wai_ajax', array(
@@ -213,7 +212,7 @@ class WebDoArticleImporter {
                             <span id="progress-current">0</span> / <span id="progress-total">0</span> articles processed
                         </p>
                         <p class="progress-status">
-                            Status: <span id="status-text">Ready</span>
+                            Status: <span id="status-text">Ready</span> <span id="import-status-indicator" class="wai-loading" style="display:none;"></span>
                         </p>
                     </div>
                     
@@ -267,7 +266,7 @@ class WebDoArticleImporter {
             echo '<tr>';
             echo '<td>' . esc_html($log->article_id) . '</td>';
             echo '<td>' . esc_html($log->title) . '</td>';
-            echo '<td><span class="status-' . $status_class . '">' . esc_html($log->status) . '</span></td>';
+            echo '<td><span class="status-' . esc_attr($status_class) . '">' . esc_html($log->status) . '</span></td>';
             echo '<td>' . esc_html($log->message) . '</td>';
             echo '<td>' . esc_html($log->imported_at) . '</td>';
             echo '</tr>';
@@ -277,9 +276,9 @@ class WebDoArticleImporter {
     private function display_import_stats() {
         global $wpdb;
         
-        $total = $wpdb->get_var("SELECT COUNT(*) FROM {$this->table_name}");
-        $success = $wpdb->get_var("SELECT COUNT(*) FROM {$this->table_name} WHERE status = 'success'");
-        $failed = $wpdb->get_var("SELECT COUNT(*) FROM {$this->table_name} WHERE status = 'failed'");
+        $total = (int)$wpdb->get_var("SELECT COUNT(*) FROM {$this->table_name}");
+        $success = (int)$wpdb->get_var("SELECT COUNT(*) FROM {$this->table_name} WHERE status = 'success'");
+        $failed = (int)$wpdb->get_var("SELECT COUNT(*) FROM {$this->table_name} WHERE status = 'failed'");
         
         ?>
         <div class="stats-grid">
@@ -303,16 +302,22 @@ class WebDoArticleImporter {
         check_ajax_referer('wai_import_nonce', 'nonce');
         
         if (!current_user_can('manage_options')) {
-            wp_die('Unauthorized');
+            wp_send_json_error(array('message' => 'Unauthorized access'));
+            return;
         }
         
-        $json_path = sanitize_text_field($_POST['json_path']);
-        $batch_size = intval($_POST['batch_size']);
-        $offset = intval($_POST['offset']);
+        $json_path = isset($_POST['json_path']) ? sanitize_text_field($_POST['json_path']) : '';
+        $batch_size = isset($_POST['batch_size']) ? intval($_POST['batch_size']) : 10;
+        $offset = isset($_POST['offset']) ? intval($_POST['offset']) : 0;
         $skip_images = isset($_POST['skip_images']) && $_POST['skip_images'] === '1';
         $test_mode = isset($_POST['test_mode']) && $_POST['test_mode'] === '1';
         $preserve_authors = isset($_POST['preserve_authors']) && $_POST['preserve_authors'] === '1';
-        $skip_lines = intval($_POST['skip_lines'] ?? 0);
+        $skip_lines = isset($_POST['skip_lines']) ? intval($_POST['skip_lines']) : 0;
+        
+        if (empty($json_path)) {
+            wp_send_json_error(array('message' => 'JSON file path is required'));
+            return;
+        }
         
         // Import configuration
         $this->importer->set_config(array(
@@ -323,81 +328,120 @@ class WebDoArticleImporter {
             'skip_lines' => $skip_lines
         ));
         
-        $result = $this->importer->import_batch($json_path, $offset, $batch_size);
-        
-        // Log results
-        foreach ($result['processed'] as $article_result) {
-            $this->log_import(
-                $article_result['id'],
-                $article_result['title'],
-                $article_result['status'],
-                $article_result['message']
-            );
+        try {
+            $result = $this->importer->import_batch($json_path, $offset, $batch_size);
+            
+            // Log results
+            foreach ($result['processed'] as $article_result) {
+                $this->log_import(
+                    $article_result['id'],
+                    $article_result['title'],
+                    $article_result['status'],
+                    $article_result['message']
+                );
+            }
+            
+            wp_send_json_success($result);
+        } catch (Exception $e) {
+            error_log('WebDo Importer Error: ' . $e->getMessage());
+            wp_send_json_error(array('message' => 'Error: ' . $e->getMessage()));
         }
-        
-        wp_send_json_success($result);
     }
     
     public function ajax_check_status() {
         check_ajax_referer('wai_import_nonce', 'nonce');
         
         if (!current_user_can('manage_options')) {
-            wp_die('Unauthorized');
+            wp_send_json_error(array('message' => 'Unauthorized access'));
+            return;
         }
         
         // Get latest stats
         global $wpdb;
         
-        $stats = array(
-            'total' => $wpdb->get_var("SELECT COUNT(*) FROM {$this->table_name}"),
-            'success' => $wpdb->get_var("SELECT COUNT(*) FROM {$this->table_name} WHERE status = 'success'"),
-            'failed' => $wpdb->get_var("SELECT COUNT(*) FROM {$this->table_name} WHERE status = 'failed'"),
-            'recent_logs' => $wpdb->get_results("SELECT * FROM {$this->table_name} ORDER BY imported_at DESC LIMIT 5")
-        );
-        
-        wp_send_json_success($stats);
+        try {
+            $stats = array(
+                'total' => (int)$wpdb->get_var("SELECT COUNT(*) FROM {$this->table_name}"),
+                'success' => (int)$wpdb->get_var("SELECT COUNT(*) FROM {$this->table_name} WHERE status = 'success'"),
+                'failed' => (int)$wpdb->get_var("SELECT COUNT(*) FROM {$this->table_name} WHERE status = 'failed'"),
+                'recent_logs' => $wpdb->get_results("SELECT * FROM {$this->table_name} ORDER BY imported_at DESC LIMIT 5")
+            );
+            
+            wp_send_json_success($stats);
+        } catch (Exception $e) {
+            error_log('WebDo Importer Status Check Error: ' . $e->getMessage());
+            wp_send_json_error(array('message' => 'Error checking status: ' . $e->getMessage()));
+        }
     }
     
     public function ajax_reset_import() {
         check_ajax_referer('wai_import_nonce', 'nonce');
         
         if (!current_user_can('manage_options')) {
-            wp_die('Unauthorized');
+            wp_send_json_error(array('message' => 'Unauthorized access'));
+            return;
         }
         
         global $wpdb;
-        $wpdb->query("TRUNCATE TABLE {$this->table_name}");
         
-        wp_send_json_success(array('message' => 'Import reset successfully'));
+        try {
+            $wpdb->query("TRUNCATE TABLE {$this->table_name}");
+            wp_send_json_success(array('message' => 'Import reset successfully'));
+        } catch (Exception $e) {
+            error_log('WebDo Importer Reset Error: ' . $e->getMessage());
+            wp_send_json_error(array('message' => 'Error resetting import: ' . $e->getMessage()));
+        }
     }
     
     public function ajax_create_table() {
         check_ajax_referer('wai_import_nonce', 'nonce');
         
         if (!current_user_can('manage_options')) {
-            wp_die('Unauthorized');
+            wp_send_json_error(array('message' => 'Unauthorized access'));
+            return;
         }
         
-        $this->create_log_table();
-        
-        wp_send_json_success(array('message' => 'Table created successfully'));
+        try {
+            $this->create_log_table();
+            
+            global $wpdb;
+            $table_exists = $wpdb->get_var("SHOW TABLES LIKE '{$this->table_name}'");
+            
+            if (!$table_exists) {
+                wp_send_json_error(array('message' => 'Failed to create table. Please check your database permissions.'));
+                return;
+            }
+            
+            wp_send_json_success(array('message' => 'Table created successfully'));
+        } catch (Exception $e) {
+            error_log('WebDo Importer Table Creation Error: ' . $e->getMessage());
+            wp_send_json_error(array('message' => 'Error creating table: ' . $e->getMessage()));
+        }
     }
     
     private function log_import($article_id, $title, $status, $message) {
         global $wpdb;
         
-        $wpdb->insert(
+        // Truncate title if too long to avoid DB errors
+        $title = substr($title, 0, 250);
+        
+        // Try to insert the log entry, handle any errors
+        $result = $wpdb->insert(
             $this->table_name,
             array(
-                'article_id' => $article_id,
+                'article_id' => intval($article_id),
                 'title' => $title,
                 'status' => $status,
                 'message' => $message
             ),
             array('%d', '%s', '%s', '%s')
         );
+        
+        if ($result === false) {
+            error_log('WebDo Importer DB Error: ' . $wpdb->last_error);
+        }
     }
 }
 
 // Initialize the plugin
-new WebDoArticleImporter();
+$webdo_article_importer = new WebDoArticleImporter();

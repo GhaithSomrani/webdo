@@ -1,8 +1,3 @@
-/**
- * WebDo Article Importer - Admin JavaScript
- * 
- * Place this file in: /wp-content/plugins/webdo-article-importer/assets/admin.js
- */
 
 (function($) {
     'use strict';
@@ -11,6 +6,7 @@
     let isPaused = false;
     let currentOffset = 0;
     let totalArticles = 0;
+    let skipLines = 0;
     
     // Initialize when DOM is ready
     $(document).ready(function() {
@@ -22,9 +18,13 @@
         
         // Update start line display when skip lines changes
         $('#skip-lines').on('input', function() {
-            const skipLines = parseInt($(this).val()) || 0;
+            skipLines = parseInt($(this).val()) || 0;
             $('#start-line').text(skipLines + 1);
         });
+        
+        // Initialize skip lines value from input
+        skipLines = parseInt($('#skip-lines').val()) || 0;
+        $('#start-line').text(skipLines + 1);
         
         // Check status on page load
         checkImportStatus();
@@ -47,8 +47,9 @@
                         alert('Error creating table: ' + response.data.message);
                     }
                 },
-                error: function() {
-                    alert('Error creating table');
+                error: function(xhr, status, error) {
+                    console.error('AJAX error:', error);
+                    alert('Error creating table: ' + error);
                 }
             });
         }
@@ -64,18 +65,31 @@
         const skipImages = $('#skip-images').is(':checked');
         const testMode = $('#test-mode').is(':checked');
         const preserveAuthors = $('#preserve-authors').is(':checked');
-        const batchSize = parseInt($('#batch-size').val());
-        const skipLines = parseInt($('#skip-lines').val()) || 0;
+        const batchSize = parseInt($('#batch-size').val()) || 10;
+        skipLines = parseInt($('#skip-lines').val()) || 0;
         
         if (!jsonPath) {
             alert('Please specify the JSON file path');
             return;
         }
         
+        // Validate batch size
+        if (batchSize < 1 || batchSize > 50) {
+            alert('Batch size must be between 1 and 50');
+            return;
+        }
+        
         // Update UI
         isImporting = true;
         isPaused = false;
-        currentOffset = skipLines; // Start from skip lines instead of 0
+        
+        // If resuming, use the current offset, otherwise start from the skip lines
+        if ($('#start-import').text() === 'Resume Import') {
+            // Keep the current offset for resuming
+        } else {
+            currentOffset = skipLines; // Start from skip lines
+        }
+        
         $('#start-import').prop('disabled', true);
         $('#pause-import').prop('disabled', false);
         $('#import-progress').show();
@@ -145,8 +159,9 @@
                     alert('Import reset successfully');
                 }
             },
-            error: function() {
-                alert('Error resetting import');
+            error: function(xhr, status, error) {
+                console.error('Reset error:', error);
+                alert('Error resetting import: ' + error);
             }
         });
     }
@@ -154,6 +169,11 @@
     function importBatch(params) {
         if (isPaused || !isImporting) {
             return;
+        }
+        
+        // Show loading indicator if it exists
+        if ($('#import-status-indicator').length) {
+            $('#import-status-indicator').show();
         }
         
         $.ajax({
@@ -167,9 +187,8 @@
             success: function(response) {
                 if (response.success) {
                     const data = response.data;
-                    const skipLines = params.skip_lines || 0;
                     
-                    // Update total if this is the first batch
+                    // Update total if this is the first batch (adjusting for skip lines)
                     if (currentOffset === skipLines) {
                         totalArticles = data.total + skipLines; // Add back the skipped lines for accurate total
                         $('#progress-total').text(totalArticles);
@@ -177,7 +196,9 @@
                     
                     // Update progress
                     currentOffset += params.batch_size;
-                    const progress = Math.min((currentOffset / totalArticles) * 100, 100);
+                    
+                    // Calculate accurate progress percentage
+                    const progress = Math.min(((currentOffset - skipLines) / data.total) * 100, 100);
                     $('.progress-bar').css('width', progress + '%');
                     $('#progress-current').text(Math.min(currentOffset, totalArticles));
                     
@@ -200,14 +221,25 @@
                     // Update statistics
                     checkImportStatus();
                 } else {
+                    console.error('Import error:', response.data.message);
                     alert('Error: ' + response.data.message);
                     pauseImport();
+                }
+                
+                // Hide loading indicator
+                if ($('#import-status-indicator').length) {
+                    $('#import-status-indicator').hide();
                 }
             },
             error: function(xhr, status, error) {
                 console.error('Import error:', error);
                 alert('Import error: ' + error);
                 pauseImport();
+                
+                // Hide loading indicator
+                if ($('#import-status-indicator').length) {
+                    $('#import-status-indicator').hide();
+                }
             }
         });
     }
@@ -275,6 +307,9 @@
                         updateRecentLogs(stats.recent_logs);
                     }
                 }
+            },
+            error: function(xhr, status, error) {
+                console.error('Status check error:', error);
             }
         });
     }
@@ -299,7 +334,10 @@
             html = '<tr><td colspan="5">No import logs yet.</td></tr>';
         } else {
             logs.forEach(function(log) {
-                const statusClass = log.status === 'success' ? 'success' : 'error';
+                let statusClass = log.status === 'success' ? 'success' : 'error';
+                if (log.message && log.message.includes('changing to ID')) {
+                    statusClass = 'updated';
+                }
                 
                 html += '<tr>';
                 html += '<td>' + escapeHtml(log.article_id) + '</td>';
@@ -315,6 +353,10 @@
     }
     
     function escapeHtml(text) {
+        if (text === undefined || text === null) {
+            return '';
+        }
+        
         const map = {
             '&': '&amp;',
             '<': '&lt;',
